@@ -200,7 +200,7 @@ def merge_similar_colors(
 
 def extract_palette_colors(
     image,
-    max_colors=12
+    max_colors= 12
 ):
 
     image = image.convert("RGB")
@@ -270,7 +270,7 @@ def extract_palette_colors(
 
     colors = merge_similar_colors(
         colors,
-        threshold=10
+        threshold= 20
     )
 
     return colors[:max_colors]
