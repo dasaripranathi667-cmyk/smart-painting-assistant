@@ -242,7 +242,7 @@ def merge_similar_colors(colors, counts=None, threshold=14):
 # PALETTE DETECTION
 # ============================================================
 
-def extract_palette_colors(image, max_colors=12):
+def extract_palette_colors(image, max_colors=24):
     """
     Detect available paint colours.
 
