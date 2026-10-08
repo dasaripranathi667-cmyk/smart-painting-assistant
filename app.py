@@ -197,19 +197,16 @@ def merge_similar_colors(
 # ============================================================
 # EXTRACT PALETTE COLORS
 # ============================================================
-
-def extract_palette_colors(
-    image,
-    max_colors= 12
-):
+def extract_palette_colors(image, max_colors=20):
 
     image = image.convert("RGB")
 
     img = np.array(image)
 
+    # Small image for faster processing
     img = cv2.resize(
         img,
-        (300, 300),
+        (150, 150),
         interpolation=cv2.INTER_AREA
     )
 
@@ -217,17 +214,21 @@ def extract_palette_colors(
         (-1, 3)
     ).astype(np.float32)
 
-    # Quantize colors slightly
-    pixels = np.round(
-        pixels / 8
-    ) * 8
+    # Sample pixels for speed
+    if len(pixels) > 6000:
 
-    pixels = np.clip(
-        pixels,
-        0,
-        255
-    ).astype(np.uint8)
+        rng = np.random.default_rng(42)
 
+        indices = rng.choice(
+            len(pixels),
+            6000,
+            replace=False
+        )
+
+        pixels = pixels[indices]
+
+    # Start with candidate clusters.
+    # This is NOT the final number of colors.
     k = min(
         max_colors,
         len(pixels)
@@ -236,16 +237,16 @@ def extract_palette_colors(
     criteria = (
         cv2.TERM_CRITERIA_EPS
         + cv2.TERM_CRITERIA_MAX_ITER,
-        30,
-        0.5
+        20,
+        1.0
     )
 
     _, labels, centers = cv2.kmeans(
-        pixels.astype(np.float32),
+        pixels,
         k,
         None,
         criteria,
-        5,
+        3,
         cv2.KMEANS_PP_CENTERS
     )
 
@@ -256,24 +257,52 @@ def extract_palette_colors(
         minlength=k
     )
 
+    # Sort by how much of the image each color occupies
     order = np.argsort(
         counts
     )[::-1]
 
-    colors = []
+    candidate_colors = []
 
     for index in order:
 
-        colors.append(
+        # Ignore extremely tiny regions
+        # caused by reflections/noise.
+        if counts[index] < len(pixels) * 0.005:
+            continue
+
+        candidate_colors.append(
             centers[index].tolist()
         )
 
-    colors = merge_similar_colors(
-        colors,
-        threshold= 20
-    )
+    # --------------------------------------------------------
+    # Merge visually similar colors
+    # --------------------------------------------------------
 
-    return colors[:max_colors]
+    final_colors = []
+
+    for color in candidate_colors:
+
+        if not final_colors:
+
+            final_colors.append(color)
+            continue
+
+        distances = [
+            color_distance_lab(
+                color,
+                existing
+            )
+            for existing in final_colors
+        ]
+
+        # 18-20 is a good starting point.
+        # Higher = more aggressive merging.
+        if min(distances) > 18:
+
+            final_colors.append(color)
+
+    return final_colors
 
 
 # ============================================================
@@ -725,7 +754,7 @@ def new_project_page():
         st.session_state.detected_palette = (
             extract_palette_colors(
                 st.session_state.palette_image,
-                max_colors=12
+                max_colors=20
             )
         )
 
