@@ -1,7 +1,9 @@
 import streamlit as st
-from PIL import Image, ImageFilter
 import numpy as np
 import cv2
+from PIL import Image
+from io import BytesIO
+from datetime import datetime
 
 
 # ============================================================
@@ -11,110 +13,72 @@ import cv2
 st.set_page_config(
     page_title="Smart Painting Assistant",
     page_icon="🎨",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+    layout="wide"
 )
 
 
 # ============================================================
-# COLOURS
+# CUSTOM CSS
 # ============================================================
 
-BG = "#FFF9F2"
-CARD = "#FFFFFF"
-TEXT = "#4A3F35"
-SUBTEXT = "#81756B"
+st.markdown("""
+<style>
 
-PINK = "#E89AAF"
-PINK_HOVER = "#D97F98"
-BLUE = "#A9D8E8"
-GREEN = "#B9D9B0"
-YELLOW = "#F8D98B"
+.stApp {
+    background-color: #fff7f2;
+}
 
+.main-title {
+    text-align: center;
+    font-size: 42px;
+    font-weight: 700;
+    color: #5b4054;
+    margin-top: 20px;
+}
 
-# ============================================================
-# CSS
-# ============================================================
+.subtitle {
+    text-align: center;
+    color: #8d7085;
+    font-size: 18px;
+    margin-bottom: 35px;
+}
 
-st.markdown(
-    f"""
-    <style>
+.card {
+    background-color: white;
+    padding: 28px;
+    border-radius: 20px;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.06);
+    margin-bottom: 20px;
+}
 
-    .stApp {{
-        background: {BG};
-    }}
+.palette-box {
+    display: inline-block;
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    margin: 5px;
+    border: 2px solid white;
+    box-shadow: 0 2px 7px rgba(0,0,0,0.12);
+}
 
-    .main-title {{
-        text-align: center;
-        color: {TEXT};
-        font-size: 42px;
-        font-weight: 700;
-        margin-top: 10px;
-        margin-bottom: 5px;
-    }}
+.project-card {
+    background: white;
+    padding: 15px;
+    border-radius: 18px;
+    box-shadow: 0 3px 15px rgba(0,0,0,0.06);
+    margin-bottom: 20px;
+}
 
-    .subtitle {{
-        text-align: center;
-        color: {SUBTEXT};
-        font-size: 17px;
-        margin-bottom: 30px;
-    }}
-
-    .section-title {{
-        color: {TEXT};
-        font-size: 22px;
-        font-weight: 700;
-        margin-top: 15px;
-        margin-bottom: 8px;
-    }}
-
-    .status {{
-        text-align: center;
-        color: {SUBTEXT};
-        font-size: 15px;
-        padding: 10px;
-    }}
-
-    div[data-testid="stFileUploader"] {{
-        background: white;
-        border-radius: 15px;
-        padding: 8px;
-    }}
-
-    .result-box {{
-        background: white;
-        border-radius: 20px;
-        padding: 15px;
-        box-shadow: 0 3px 15px rgba(74,63,53,0.08);
-    }}
-
-    .info-box {{
-        background: white;
-        border-radius: 15px;
-        padding: 15px;
-        color: {TEXT};
-        box-shadow: 0 2px 10px rgba(74,63,53,0.06);
-    }}
-
-    @media (max-width: 768px) {{
-        .main-title {{
-            font-size: 30px;
-        }}
-
-        .subtitle {{
-            font-size: 14px;
-        }}
-    }}
-
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+</style>
+""", unsafe_allow_html=True)
 
 
 # ============================================================
 # SESSION STATE
 # ============================================================
+
+if "page" not in st.session_state:
+    st.session_state.page = "home"
 
 if "reference_image" not in st.session_state:
     st.session_state.reference_image = None
@@ -125,299 +89,201 @@ if "palette_image" not in st.session_state:
 if "result_image" not in st.session_state:
     st.session_state.result_image = None
 
-if "available_palette" not in st.session_state:
-    st.session_state.available_palette = []
+if "detected_palette" not in st.session_state:
+    st.session_state.detected_palette = []
+
+if "saved_projects" not in st.session_state:
+    st.session_state.saved_projects = []
+
+if "selected_project" not in st.session_state:
+    st.session_state.selected_project = None
+
+
+# ============================================================
+# NAVIGATION
+# ============================================================
+
+def go_home():
+    st.session_state.page = "home"
+
+
+def go_new_project():
+    st.session_state.page = "new"
+
+
+def go_saved_projects():
+    st.session_state.page = "saved"
+
+
+def clear_current_project():
+
+    st.session_state.reference_image = None
+    st.session_state.palette_image = None
+    st.session_state.result_image = None
+    st.session_state.detected_palette = []
 
 
 # ============================================================
 # IMAGE HELPERS
 # ============================================================
 
-def load_image(uploaded_file):
-    """Convert Streamlit uploaded/camera image into RGB PIL image."""
+def image_to_bytes(image):
 
-    if uploaded_file is None:
-        return None
+    buffer = BytesIO()
 
-    try:
-        return Image.open(uploaded_file).convert("RGB")
-    except Exception:
-        return None
-
-
-def resize_for_processing(image, max_dimension=900):
-    """Resize large images while keeping aspect ratio."""
-
-    image = image.copy()
-
-    width, height = image.size
-
-    largest = max(width, height)
-
-    if largest <= max_dimension:
-        return image
-
-    scale = max_dimension / largest
-
-    new_size = (
-        max(1, int(width * scale)),
-        max(1, int(height * scale))
+    image.save(
+        buffer,
+        format="PNG"
     )
 
-    return image.resize(
-        new_size,
-        Image.Resampling.LANCZOS
+    return buffer.getvalue()
+
+
+# ============================================================
+# COLOR DISTANCE
+# ============================================================
+
+def color_distance_lab(color1, color2):
+
+    a = np.uint8([[color1]])
+    b = np.uint8([[color2]])
+
+    lab1 = cv2.cvtColor(
+        a,
+        cv2.COLOR_RGB2LAB
+    )[0, 0].astype(float)
+
+    lab2 = cv2.cvtColor(
+        b,
+        cv2.COLOR_RGB2LAB
+    )[0, 0].astype(float)
+
+    return np.linalg.norm(
+        lab1 - lab2
     )
 
 
 # ============================================================
-# COLOUR DISTANCE
+# MERGE SIMILAR COLORS
 # ============================================================
 
-def colour_distance_lab(colour1, colour2):
-    """
-    Calculate perceptual distance between two RGB colours
-    using LAB colour space.
-    """
-
-    a = np.uint8([[colour1]])
-    b = np.uint8([[colour2]])
-
-    lab_a = cv2.cvtColor(a, cv2.COLOR_RGB2LAB)[0, 0].astype(
-        np.float32
-    )
-
-    lab_b = cv2.cvtColor(b, cv2.COLOR_RGB2LAB)[0, 0].astype(
-        np.float32
-    )
-
-    return float(np.linalg.norm(lab_a - lab_b))
-
-
-# ============================================================
-# MERGE SIMILAR COLOURS
-# ============================================================
-
-def merge_similar_colors(colors, counts=None, threshold=14):
-    """
-    Merge colours that are perceptually very similar.
-    """
-
-    if not colors:
-        return []
-
-    if counts is None:
-        counts = [1] * len(colors)
-
-    order = np.argsort(counts)[::-1]
+def merge_similar_colors(
+    colors,
+    threshold=12
+):
 
     merged = []
 
-    for idx in order:
+    for color in colors:
 
-        colour = tuple(
-            int(x) for x in colors[idx]
-        )
+        if not merged:
+            merged.append(color)
+            continue
 
-        too_similar = False
-
-        for existing in merged:
-
-            distance = colour_distance_lab(
-                colour,
+        distances = [
+            color_distance_lab(
+                color,
                 existing
             )
+            for existing in merged
+        ]
 
-            if distance < threshold:
-                too_similar = True
-                break
-
-        if not too_similar:
-            merged.append(colour)
+        if min(distances) > threshold:
+            merged.append(color)
 
     return merged
 
 
 # ============================================================
-# PALETTE DETECTION
+# EXTRACT PALETTE COLORS
 # ============================================================
 
-def extract_palette_colors(image, max_colors=24):
-    """
-    Detect available paint colours.
+def extract_palette_colors(
+    image,
+    max_colors=12
+):
 
-    Unlike the old version, this intentionally keeps:
-    - colourful paints
-    - white
-    - black
-    - grey
-    - muted colours
-    """
+    image = image.convert("RGB")
 
-    image = resize_for_processing(
-        image,
-        max_dimension=300
-    )
+    img = np.array(image)
 
-    img = np.array(image.convert("RGB"))
-
-    # Small image for faster processing
-    small = cv2.resize(
+    img = cv2.resize(
         img,
-        (180, 180),
+        (300, 300),
         interpolation=cv2.INTER_AREA
     )
 
-    hsv = cv2.cvtColor(
-        small,
-        cv2.COLOR_RGB2HSV
-    )
+    pixels = img.reshape(
+        (-1, 3)
+    ).astype(np.float32)
 
-    saturation = hsv[:, :, 1]
-    value = hsv[:, :, 2]
+    # Quantize colors slightly
+    pixels = np.round(
+        pixels / 8
+    ) * 8
 
-    # --------------------------------------------------------
-    # Keep BOTH colourful and neutral colours
-    # --------------------------------------------------------
+    pixels = np.clip(
+        pixels,
+        0,
+        255
+    ).astype(np.uint8)
 
-    colourful = (
-        (saturation >= 30) &
-        (value >= 25) &
-        (value <= 255)
-    )
-
-    dark_neutral = (
-        (saturation < 45) &
-        (value <= 75)
-    )
-
-    light_neutral = (
-        (saturation < 45) &
-        (value >= 190)
-    )
-
-    neutral = (
-        dark_neutral |
-        light_neutral
-    )
-
-    mask = colourful | neutral
-
-    pixels = small[mask]
-
-    # If the mask is too restrictive, use all pixels
-    if len(pixels) < 200:
-        pixels = small.reshape(-1, 3)
-
-    # Limit number of pixels
-    if len(pixels) > 20000:
-
-        rng = np.random.default_rng(42)
-
-        indices = rng.choice(
-            len(pixels),
-            20000,
-            replace=False
-        )
-
-        pixels = pixels[indices]
-
-    pixels = np.float32(pixels)
-
-    if len(pixels) < 3:
-        return []
-
-    # --------------------------------------------------------
-    # K-MEANS
-    # --------------------------------------------------------
-
-    K = min(
+    k = min(
         max_colors,
-        max(4, len(pixels) // 700)
+        len(pixels)
     )
 
     criteria = (
-        cv2.TERM_CRITERIA_EPS +
-        cv2.TERM_CRITERIA_MAX_ITER,
-        60,
+        cv2.TERM_CRITERIA_EPS
+        + cv2.TERM_CRITERIA_MAX_ITER,
+        30,
         0.5
     )
 
-    try:
-
-        _, labels, centers = cv2.kmeans(
-            pixels,
-            K,
-            None,
-            criteria,
-            12,
-            cv2.KMEANS_PP_CENTERS
-        )
-
-    except Exception:
-        return []
-
-    centers = np.uint8(
-        np.clip(
-            centers,
-            0,
-            255
-        )
+    _, labels, centers = cv2.kmeans(
+        pixels.astype(np.float32),
+        k,
+        None,
+        criteria,
+        5,
+        cv2.KMEANS_PP_CENTERS
     )
+
+    centers = np.uint8(centers)
 
     counts = np.bincount(
         labels.flatten(),
-        minlength=K
+        minlength=k
     )
 
     order = np.argsort(
         counts
     )[::-1]
 
-    ordered_colors = []
-    ordered_counts = []
+    colors = []
 
     for index in order:
 
-        colour = tuple(
-            int(x)
-            for x in centers[index]
+        colors.append(
+            centers[index].tolist()
         )
 
-        ordered_colors.append(colour)
-        ordered_counts.append(
-            int(counts[index])
-        )
-
-    # Merge nearly identical colours
-    detected = merge_similar_colors(
-        ordered_colors,
-        ordered_counts,
-        threshold=13
+    colors = merge_similar_colors(
+        colors,
+        threshold=10
     )
 
-    # Limit number of paints
-    detected = detected[:max_colors]
-
-    return detected
+    return colors[:max_colors]
 
 
 # ============================================================
-# REFERENCE COLOUR QUANTIZATION
+# CREATE REFERENCE CLUSTERS
 # ============================================================
 
-def create_reference_clusters(image, max_colors=18):
-    """
-    Break the reference painting into meaningful colour regions.
-
-    This is more stable than repeatedly applying a distance mask
-    to every colour centre.
-    """
-
-    image = resize_for_processing(
-        image,
-        max_dimension=850
-    )
+def create_reference_clusters(
+    image,
+    max_colors=18
+):
 
     img = np.array(
         image.convert("RGB")
@@ -425,680 +291,985 @@ def create_reference_clusters(image, max_colors=18):
 
     height, width = img.shape[:2]
 
-    # Work on a smaller image for K-means
-    scale_width = min(width, 320)
-    scale_height = max(
-        1,
-        int(height * (scale_width / width))
+    scale = min(
+        1.0,
+        700 / max(height, width)
     )
 
-    small = cv2.resize(
-        img,
-        (scale_width, scale_height),
-        interpolation=cv2.INTER_AREA
-    )
+    if scale < 1:
 
-    pixels = small.reshape(
-        (-1, 3)
-    ).astype(
-        np.float32
-    )
-
-    # Keep K reasonable
-    K = min(
-        max_colors,
-        max(
-            8,
-            len(pixels) // 2500
+        img = cv2.resize(
+            img,
+            (
+                int(width * scale),
+                int(height * scale)
+            ),
+            interpolation=cv2.INTER_AREA
         )
+
+    pixels = img.reshape(
+        (-1, 3)
+    ).astype(np.float32)
+
+    pixels = np.round(
+        pixels / 6
+    ) * 6
+
+    pixels = np.clip(
+        pixels,
+        0,
+        255
     )
 
-    K = max(
-        4,
-        min(K, 18)
+    k = min(
+        max_colors,
+        len(pixels)
     )
 
     criteria = (
-        cv2.TERM_CRITERIA_EPS +
-        cv2.TERM_CRITERIA_MAX_ITER,
-        70,
-        0.4
+        cv2.TERM_CRITERIA_EPS
+        + cv2.TERM_CRITERIA_MAX_ITER,
+        35,
+        0.5
     )
 
-    _, _, centers = cv2.kmeans(
+    _, labels, centers = cv2.kmeans(
         pixels,
-        K,
+        k,
         None,
         criteria,
-        10,
+        5,
         cv2.KMEANS_PP_CENTERS
     )
 
-    centers = np.uint8(
-        np.clip(
-            centers,
-            0,
-            255
-        )
-    )
+    centers = np.uint8(centers)
 
     return centers
 
 
 # ============================================================
-# CLOSEST PAINT
+# FIND CLOSEST PAINT COLOR
 # ============================================================
 
-def closest_paint(reference_colour, palette):
-    """
-    Find the closest available paint in LAB space.
-    """
+def closest_paint(
+    reference_color,
+    palette
+):
 
     if not palette:
-        return tuple(
-            int(x)
-            for x in reference_colour
-        )
+        return reference_color
 
-    ref = np.uint8(
-        [[
-            reference_colour
-        ]]
-    )
-
-    ref_lab = cv2.cvtColor(
-        ref,
-        cv2.COLOR_RGB2LAB
-    )[0, 0].astype(
-        np.float32
-    )
-
-    best_colour = palette[0]
-    best_distance = float("inf")
+    distances = []
 
     for paint in palette:
 
-        paint_array = np.uint8(
-            [[paint]]
+        distances.append(
+            color_distance_lab(
+                reference_color,
+                paint
+            )
         )
 
-        paint_lab = cv2.cvtColor(
-            paint_array,
-            cv2.COLOR_RGB2LAB
-        )[0, 0].astype(
-            np.float32
-        )
+    index = int(
+        np.argmin(distances)
+    )
 
-        distance = np.linalg.norm(
-            ref_lab - paint_lab
-        )
-
-        if distance < best_distance:
-
-            best_distance = distance
-            best_colour = paint
-
-    return best_colour
+    return palette[index]
 
 
 # ============================================================
-# GENERATE PAINTING
+# CREATE PAINTING RESULT
 # ============================================================
 
-def create_result(reference_image, palette):
-    """
-    Convert the reference into a painting using only
-    colours available in the palette.
-    """
+def create_result(
+    reference_image,
+    palette
+):
 
-    if reference_image is None:
-        return None
-
-    if not palette:
-        return None
-
-    # --------------------------------------------------------
-    # Prepare image
-    # --------------------------------------------------------
-
-    working_image = resize_for_processing(
-        reference_image,
-        max_dimension=900
+    original = reference_image.convert(
+        "RGB"
     )
 
-    img = np.array(
-        working_image.convert("RGB")
+    original_array = np.array(
+        original
     )
 
-    height, width = img.shape[:2]
+    height, width = original_array.shape[:2]
+
+    max_dimension = 700
+
+    scale = min(
+        1.0,
+        max_dimension / max(height, width)
+    )
+
+    if scale < 1:
+
+        working = cv2.resize(
+            original_array,
+            (
+                int(width * scale),
+                int(height * scale)
+            ),
+            interpolation=cv2.INTER_AREA
+        )
+
+    else:
+
+        working = original_array.copy()
 
     # --------------------------------------------------------
-    # Reference colour clusters
+    # Reference color clusters
     # --------------------------------------------------------
 
-    centers = create_reference_clusters(
-        working_image,
+    clusters = create_reference_clusters(
+        Image.fromarray(working),
         max_colors=18
     )
 
     # --------------------------------------------------------
-    # Convert reference + centres to LAB
+    # Convert image and clusters to LAB
     # --------------------------------------------------------
 
     lab_image = cv2.cvtColor(
-        img,
+        working,
         cv2.COLOR_RGB2LAB
-    ).astype(
-        np.float32
-    )
+    ).astype(np.float32)
 
-    center_rgb = np.uint8(
-        centers
-    )
-
-    center_lab = cv2.cvtColor(
-        center_rgb.reshape(
-            1,
-            -1,
-            3
-        ),
+    lab_clusters = cv2.cvtColor(
+        clusters.reshape((-1, 1, 3)),
         cv2.COLOR_RGB2LAB
     ).reshape(
-        -1,
-        3
-    ).astype(
-        np.float32
+        (-1, 3)
+    ).astype(np.float32)
+
+    pixels = lab_image.reshape(
+        (-1, 3)
     )
 
     # --------------------------------------------------------
-    # Map every reference cluster to closest paint
+    # Find nearest reference cluster for every pixel
     # --------------------------------------------------------
 
-    palette_array = np.uint8(
-        palette
-    )
-
-    palette_lab = cv2.cvtColor(
-        palette_array.reshape(
-            1,
-            -1,
-            3
-        ),
-        cv2.COLOR_RGB2LAB
-    ).reshape(
-        -1,
-        3
-    ).astype(
-        np.float32
-    )
-
-    cluster_to_paint = []
-
-    for ref_lab in center_lab:
-
-        distances = np.linalg.norm(
-            palette_lab - ref_lab,
-            axis=1
-        )
-
-        best_index = int(
-            np.argmin(distances)
-        )
-
-        cluster_to_paint.append(
-            palette[best_index]
-        )
-
-    # --------------------------------------------------------
-    # Assign each pixel to closest reference cluster
-    # --------------------------------------------------------
-
-    flat_lab = lab_image.reshape(
-        -1,
-        3
-    )
-
-    # Process in chunks so large images don't use excessive RAM
-    labels = np.empty(
-        len(flat_lab),
-        dtype=np.int32
-    )
-
-    chunk_size = 50000
-
-    for start in range(
-        0,
-        len(flat_lab),
-        chunk_size
-    ):
-
-        end = min(
-            start + chunk_size,
-            len(flat_lab)
-        )
-
-        chunk = flat_lab[start:end]
-
-        distances = np.linalg.norm(
-            chunk[:, None, :] -
-            center_lab[None, :, :],
-            axis=2
-        )
-
-        labels[start:end] = np.argmin(
-            distances,
-            axis=1
-        )
-
-    # --------------------------------------------------------
-    # Create result
-    # --------------------------------------------------------
-
-    result_flat = np.zeros(
+    distances = np.zeros(
         (
-            len(flat_lab),
-            3
+            len(pixels),
+            len(lab_clusters)
         ),
-        dtype=np.uint8
+        dtype=np.float32
     )
 
-    for i, paint in enumerate(
-        cluster_to_paint
+    for i, cluster in enumerate(
+        lab_clusters
     ):
 
-        result_flat[
-            labels == i
-        ] = np.array(
-            paint,
-            dtype=np.uint8
+        distances[:, i] = np.linalg.norm(
+            pixels - cluster,
+            axis=1
         )
 
-    result = result_flat.reshape(
-        height,
-        width,
-        3
+    labels = np.argmin(
+        distances,
+        axis=1
     )
 
-    result_image = Image.fromarray(
-        result,
-        "RGB"
+    # --------------------------------------------------------
+    # Replace each cluster with nearest paint color
+    # --------------------------------------------------------
+
+    output = np.zeros_like(
+        working
     )
+
+    output_pixels = output.reshape(
+        (-1, 3)
+    )
+
+    for cluster_index in range(
+        len(clusters)
+    ):
+
+        mask = (
+            labels == cluster_index
+        )
+
+        if not np.any(mask):
+            continue
+
+        reference_color = (
+            clusters[cluster_index]
+        )
+
+        paint_color = closest_paint(
+            reference_color,
+            palette
+        )
+
+        output_pixels[mask] = (
+            paint_color
+        )
 
     # --------------------------------------------------------
     # Slight smoothing
     # --------------------------------------------------------
 
-    result_image = result_image.filter(
-        ImageFilter.GaussianBlur(
-            radius=0.45
-        )
+    output = cv2.GaussianBlur(
+        output,
+        (5, 5),
+        0
     )
 
-    return result_image
+    # --------------------------------------------------------
+    # Restore original size
+    # --------------------------------------------------------
+
+    if scale < 1:
+
+        output = cv2.resize(
+            output,
+            (width, height),
+            interpolation=cv2.INTER_LINEAR
+        )
+
+    return Image.fromarray(
+        output
+    )
 
 
 # ============================================================
-# HEADER
+# HOME PAGE
 # ============================================================
 
-st.markdown(
-    '<div class="main-title">🎨 Smart Painting Assistant</div>',
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    '<div class="subtitle">'
-    'Turn your available colours into beautiful paintings ✨'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-
-# ============================================================
-# INPUT SECTION
-# ============================================================
-
-col1, col2 = st.columns(
-    2,
-    gap="large"
-)
-
-
-# ============================================================
-# REFERENCE
-# ============================================================
-
-with col1:
+def home_page():
 
     st.markdown(
-        '<div class="section-title">🖼️ Reference Painting</div>',
+        '<div class="main-title">'
+        '🎨 Smart Painting Assistant'
+        '</div>',
         unsafe_allow_html=True
     )
 
-    reference_method = st.radio(
-        "Reference input",
-        [
-            "📁 Gallery",
-            "📷 Camera"
-        ],
-        horizontal=True,
-        key="reference_method"
-    )
-
-    reference_file = None
-
-    if reference_method == "📁 Gallery":
-
-        reference_file = st.file_uploader(
-            "Upload your reference painting",
-            type=[
-                "png",
-                "jpg",
-                "jpeg",
-                "webp",
-                "bmp"
-            ],
-            key="reference_upload"
-        )
-
-    else:
-
-        reference_file = st.camera_input(
-            "Take a photo of your reference painting",
-            key="reference_camera"
-        )
-
-    if reference_file is not None:
-
-        new_reference = load_image(
-            reference_file
-        )
-
-        if new_reference is not None:
-
-            st.session_state.reference_image = (
-                new_reference
-            )
-
-    if st.session_state.reference_image is not None:
-
-        st.image(
-            st.session_state.reference_image,
-            use_container_width=True
-        )
-
-
-# ============================================================
-# PALETTE
-# ============================================================
-
-with col2:
-
     st.markdown(
-        '<div class="section-title">🎨 Your Paint Palette</div>',
+        '<div class="subtitle">'
+        'Turn your reference image into a '
+        'paint-friendly version.'
+        '</div>',
         unsafe_allow_html=True
     )
 
-    palette_method = st.radio(
-        "Palette input",
-        [
-            "📁 Gallery",
-            "📷 Camera"
-        ],
-        horizontal=True,
-        key="palette_method"
+    st.write("")
+
+    col1, col2 = st.columns(
+        2,
+        gap="large"
     )
 
-    palette_file = None
+    # --------------------------------------------------------
+    # New Project
+    # --------------------------------------------------------
 
-    if palette_method == "📁 Gallery":
+    with col1:
 
-        palette_file = st.file_uploader(
-            "Upload your paint palette",
-            type=[
-                "png",
-                "jpg",
-                "jpeg",
-                "webp",
-                "bmp"
-            ],
-            key="palette_upload"
-        )
-
-    else:
-
-        palette_file = st.camera_input(
-            "Take a photo of your paint palette",
-            key="palette_camera"
-        )
-
-    if palette_file is not None:
-
-        new_palette = load_image(
-            palette_file
-        )
-
-        if new_palette is not None:
-
-            # Avoid unnecessary reprocessing
-            if (
-                st.session_state.palette_image is None
-                or new_palette.tobytes()
-                != st.session_state.palette_image.tobytes()
-            ):
-
-                st.session_state.palette_image = (
-                    new_palette
-                )
-
-                st.session_state.available_palette = (
-                    extract_palette_colors(
-                        new_palette
-                    )
-                )
-
-    if st.session_state.palette_image is not None:
-
-        st.image(
-            st.session_state.palette_image,
-            use_container_width=True
-        )
-
-
-# ============================================================
-# DETECTED PALETTE
-# ============================================================
-
-if st.session_state.available_palette:
-
-    st.markdown(
-        '<div class="section-title">🎨 Detected Paint Colours</div>',
-        unsafe_allow_html=True
-    )
-
-    palette_cols = st.columns(
-        len(st.session_state.available_palette)
-    )
-
-    for col, colour in zip(
-        palette_cols,
-        st.session_state.available_palette
-    ):
-
-        hex_colour = "#{:02X}{:02X}{:02X}".format(
-            *colour
-        )
-
-        col.markdown(
-            f"""
-            <div style="
-                width:100%;
-                height:45px;
-                background:{hex_colour};
-                border-radius:12px;
-                border:1px solid #DDD;
-                margin-bottom:5px;
-            "></div>
-            <div style="
-                text-align:center;
-                color:{TEXT};
-                font-size:11px;
-            ">
-                {hex_colour}
+        st.markdown(
+            """
+            <div class="card">
+                <h2>✨ New Project</h2>
+                <p>
+                Start a new painting using your
+                reference image and paint palette.
+                </p>
             </div>
             """,
             unsafe_allow_html=True
         )
 
-    st.markdown(
-        f'<div class="status">'
-        f'{len(st.session_state.available_palette)} '
-        f'paint colours detected ✓'
-        f'</div>',
-        unsafe_allow_html=True
-    )
-
-
-# ============================================================
-# GENERATE BUTTON
-# ============================================================
-
-st.markdown("")
-
-generate_col1, generate_col2, generate_col3 = st.columns(
-    [1, 2, 1]
-)
-
-with generate_col2:
-
-    generate = st.button(
-        "✨ Generate Painting",
-        use_container_width=True,
-        type="primary"
-    )
-
-
-# ============================================================
-# GENERATE
-# ============================================================
-
-if generate:
-
-    if st.session_state.reference_image is None:
-
-        st.warning(
-            "Please upload or photograph a reference painting first."
-        )
-
-    elif st.session_state.palette_image is None:
-
-        st.warning(
-            "Please upload or photograph your paint palette first."
-        )
-
-    elif not st.session_state.available_palette:
-
-        st.warning(
-            "No paint colours could be detected from the palette."
-        )
-
-    else:
-
-        with st.spinner(
-            "🎨 Creating your painting..."
+        if st.button(
+            "🎨 NEW PROJECT",
+            use_container_width=True
         ):
 
-            try:
+            go_new_project()
+            st.rerun()
 
-                result = create_result(
-                    st.session_state.reference_image,
-                    st.session_state.available_palette
-                )
+    # --------------------------------------------------------
+    # Saved Projects
+    # --------------------------------------------------------
 
-                st.session_state.result_image = result
+    with col2:
 
-            except Exception as e:
+        st.markdown(
+            """
+            <div class="card">
+                <h2>📁 Saved Projects</h2>
+                <p>
+                View and reopen your previously
+                saved paintings.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-                st.error(
-                    f"Could not generate the painting: {e}"
-                )
+        if st.button(
+            "📂 SAVED PROJECTS",
+            use_container_width=True
+        ):
 
+            go_saved_projects()
+            st.rerun()
 
-# ============================================================
-# RESULT
-# ============================================================
+    st.write("")
+    st.write("")
 
-if st.session_state.result_image is not None:
-
-    st.markdown(
-        '<div class="section-title">✨ Generated Painting</div>',
-        unsafe_allow_html=True
+    project_count = len(
+        st.session_state.saved_projects
     )
 
-    st.markdown(
-        '<div class="result-box">',
-        unsafe_allow_html=True
+    st.info(
+        f"📁 {project_count} project(s) "
+        "saved in this session."
+    )
+
+
+# ============================================================
+# NEW PROJECT PAGE
+# ============================================================
+
+def new_project_page():
+
+    col_back, col_title = st.columns(
+        [1, 5]
+    )
+
+    with col_back:
+
+        if st.button("← Home"):
+
+            go_home()
+            st.rerun()
+
+    with col_title:
+
+        st.markdown(
+            "<h1>🎨 New Project</h1>",
+            unsafe_allow_html=True
+        )
+
+    st.divider()
+
+    # ========================================================
+    # REFERENCE IMAGE
+    # ========================================================
+
+    st.subheader(
+        "1. Reference Image"
+    )
+
+    reference_file = st.file_uploader(
+        "Upload your reference image",
+        type=[
+            "png",
+            "jpg",
+            "jpeg",
+            "webp"
+        ],
+        key="reference_uploader"
+    )
+
+    if reference_file is not None:
+
+        st.session_state.reference_image = (
+            Image.open(
+                reference_file
+            ).convert("RGB")
+        )
+
+    if st.session_state.reference_image:
+
+        st.image(
+            st.session_state.reference_image,
+            caption="Reference Image",
+            use_container_width=True
+        )
+
+    st.divider()
+
+    # ========================================================
+    # PALETTE IMAGE
+    # ========================================================
+
+    st.subheader(
+        "2. Paint Palette"
+    )
+
+    palette_file = st.file_uploader(
+        "Upload a photo of your paint palette",
+        type=[
+            "png",
+            "jpg",
+            "jpeg",
+            "webp"
+        ],
+        key="palette_uploader"
+    )
+
+    if palette_file is not None:
+
+        st.session_state.palette_image = (
+            Image.open(
+                palette_file
+            ).convert("RGB")
+        )
+
+        # Detect colors immediately
+        st.session_state.detected_palette = (
+            extract_palette_colors(
+                st.session_state.palette_image,
+                max_colors=12
+            )
+        )
+
+    if st.session_state.palette_image:
+
+        st.image(
+            st.session_state.palette_image,
+            caption="Paint Palette",
+            use_container_width=True
+        )
+
+    # ========================================================
+    # DETECTED COLORS
+    # ========================================================
+
+    if st.session_state.detected_palette:
+
+        st.subheader(
+            "Detected Paint Colors"
+        )
+
+        html = ""
+
+        for color in (
+            st.session_state.detected_palette
+        ):
+
+            r, g, b = color
+
+            html += (
+                f'<span class="palette-box" '
+                f'style="background:rgb({r},{g},{b})" '
+                f'title="RGB {r},{g},{b}"></span>'
+            )
+
+        st.markdown(
+            html,
+            unsafe_allow_html=True
+        )
+
+        st.caption(
+            f"{len(st.session_state.detected_palette)} "
+            "colors detected"
+        )
+
+    st.divider()
+
+    # ========================================================
+    # GENERATE
+    # ========================================================
+
+    if st.button(
+        "✨ GENERATE PAINTING",
+        type="primary",
+        use_container_width=True
+    ):
+
+        if (
+            st.session_state.reference_image
+            is None
+        ):
+
+            st.warning(
+                "Please upload a reference image."
+            )
+
+        elif (
+            st.session_state.palette_image
+            is None
+        ):
+
+            st.warning(
+                "Please upload your paint palette."
+            )
+
+        elif not (
+            st.session_state.detected_palette
+        ):
+
+            st.warning(
+                "No paint colors were detected."
+            )
+
+        else:
+
+            with st.spinner(
+                "Creating your painting..."
+            ):
+
+                st.session_state.result_image = (
+                    create_result(
+                        st.session_state.reference_image,
+                        st.session_state.detected_palette
+                    )
+                )
+
+            st.success(
+                "Painting generated successfully!"
+            )
+
+    # ========================================================
+    # RESULT
+    # ========================================================
+
+    if st.session_state.result_image:
+
+        st.divider()
+
+        st.subheader(
+            "3. Generated Painting"
+        )
+
+        st.image(
+            st.session_state.result_image,
+            caption="Generated Painting",
+            use_container_width=True
+        )
+
+        st.download_button(
+            "⬇️ DOWNLOAD PAINTING",
+            data=image_to_bytes(
+                st.session_state.result_image
+            ),
+            file_name="smart_painting.png",
+            mime="image/png",
+            use_container_width=True
+        )
+
+        st.divider()
+
+        # ====================================================
+        # SAVE PROJECT
+        # ====================================================
+
+        st.subheader(
+            "💾 Save Project"
+        )
+
+        project_name = st.text_input(
+            "Project name",
+            placeholder="Example: Sunset Landscape",
+            key="project_name"
+        )
+
+        if st.button(
+            "💾 SAVE PROJECT",
+            use_container_width=True
+        ):
+
+            if not project_name.strip():
+
+                st.warning(
+                    "Please enter a project name."
+                )
+
+            else:
+
+                new_project = {
+
+                    "name":
+                        project_name.strip(),
+
+                    "reference":
+                        st.session_state.reference_image.copy(),
+
+                    "palette":
+                        st.session_state.palette_image.copy(),
+
+                    "result":
+                        st.session_state.result_image.copy(),
+
+                    "colors":
+                        list(
+                            st.session_state.detected_palette
+                        ),
+
+                    "date":
+                        datetime.now().strftime(
+                            "%d %b %Y, %I:%M %p"
+                        )
+                }
+
+                st.session_state.saved_projects.append(
+                    new_project
+                )
+
+                st.success(
+                    f"✅ '{project_name.strip()}' "
+                    "saved successfully!"
+                )
+
+    st.divider()
+
+    # ========================================================
+    # CLEAR
+    # ========================================================
+
+    if st.button(
+        "🗑️ CLEAR PROJECT",
+        use_container_width=True
+    ):
+
+        clear_current_project()
+
+        # Clear uploader widgets
+        st.session_state.pop(
+            "reference_uploader",
+            None
+        )
+
+        st.session_state.pop(
+            "palette_uploader",
+            None
+        )
+
+        st.session_state.pop(
+            "project_name",
+            None
+        )
+
+        st.rerun()
+
+
+# ============================================================
+# SAVED PROJECTS PAGE
+# ============================================================
+
+def saved_projects_page():
+
+    col_back, col_title = st.columns(
+        [1, 5]
+    )
+
+    with col_back:
+
+        if st.button("← Home"):
+
+            go_home()
+            st.rerun()
+
+    with col_title:
+
+        st.markdown(
+            "<h1>📁 Saved Projects</h1>",
+            unsafe_allow_html=True
+        )
+
+    st.divider()
+
+    projects = (
+        st.session_state.saved_projects
+    )
+
+    # --------------------------------------------------------
+    # No projects
+    # --------------------------------------------------------
+
+    if not projects:
+
+        st.info(
+            "You don't have any saved projects yet."
+        )
+
+        st.write("")
+
+        if st.button(
+            "🎨 CREATE NEW PROJECT",
+            use_container_width=True
+        ):
+
+            go_new_project()
+            st.rerun()
+
+        return
+
+    st.write(
+        f"**{len(projects)} saved project(s)**"
+    )
+
+    st.write("")
+
+    # --------------------------------------------------------
+    # Project grid
+    # --------------------------------------------------------
+
+    columns = st.columns(3)
+
+    for index, project in enumerate(
+        projects
+    ):
+
+        with columns[
+            index % 3
+        ]:
+
+            st.markdown(
+                '<div class="project-card">',
+                unsafe_allow_html=True
+            )
+
+            st.image(
+                project["result"],
+                use_container_width=True
+            )
+
+            st.markdown(
+                f"### {project['name']}"
+            )
+
+            st.caption(
+                f"🕒 {project['date']}"
+            )
+
+            col_open, col_delete = st.columns(
+                2
+            )
+
+            # ----------------------------------------------
+            # OPEN
+            # ----------------------------------------------
+
+            with col_open:
+
+                if st.button(
+                    "👁️ Open",
+                    key=f"open_{index}",
+                    use_container_width=True
+                ):
+
+                    st.session_state.selected_project = (
+                        index
+                    )
+
+                    st.session_state.page = (
+                        "view_project"
+                    )
+
+                    st.rerun()
+
+            # ----------------------------------------------
+            # DELETE
+            # ----------------------------------------------
+
+            with col_delete:
+
+                if st.button(
+                    "🗑️ Delete",
+                    key=f"delete_{index}",
+                    use_container_width=True
+                ):
+
+                    st.session_state.saved_projects.pop(
+                        index
+                    )
+
+                    st.success(
+                        "Project deleted."
+                    )
+
+                    st.rerun()
+
+            st.markdown(
+                '</div>',
+                unsafe_allow_html=True
+            )
+
+
+# ============================================================
+# VIEW SAVED PROJECT
+# ============================================================
+
+def view_project_page():
+
+    index = (
+        st.session_state.selected_project
+    )
+
+    projects = (
+        st.session_state.saved_projects
+    )
+
+    # Safety check
+    if (
+        index is None
+        or index >= len(projects)
+    ):
+
+        go_saved_projects()
+        st.rerun()
+
+    project = projects[index]
+
+    # --------------------------------------------------------
+    # Back
+    # --------------------------------------------------------
+
+    if st.button(
+        "← Back to Saved Projects"
+    ):
+
+        go_saved_projects()
+        st.rerun()
+
+    st.title(
+        f"🎨 {project['name']}"
+    )
+
+    st.caption(
+        f"Saved: {project['date']}"
+    )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # Reference + palette
+    # --------------------------------------------------------
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        st.subheader(
+            "Reference Image"
+        )
+
+        st.image(
+            project["reference"],
+            use_container_width=True
+        )
+
+    with col2:
+
+        st.subheader(
+            "Paint Palette"
+        )
+
+        st.image(
+            project["palette"],
+            use_container_width=True
+        )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # Generated painting
+    # --------------------------------------------------------
+
+    st.subheader(
+        "Generated Painting"
     )
 
     st.image(
-        st.session_state.result_image,
+        project["result"],
         use_container_width=True
     )
 
-    st.markdown(
-        '</div>',
-        unsafe_allow_html=True
-    )
+    # --------------------------------------------------------
+    # Colors
+    # --------------------------------------------------------
+
+    if project["colors"]:
+
+        st.subheader(
+            "Paint Colors Used"
+        )
+
+        html = ""
+
+        for color in project["colors"]:
+
+            r, g, b = color
+
+            html += (
+                f'<span class="palette-box" '
+                f'style="background:rgb({r},{g},{b})" '
+                f'title="RGB {r},{g},{b}"></span>'
+            )
+
+        st.markdown(
+            html,
+            unsafe_allow_html=True
+        )
+
+    st.write("")
 
     # --------------------------------------------------------
     # Download
     # --------------------------------------------------------
 
-    from io import BytesIO
-
-    buffer = BytesIO()
-
-    st.session_state.result_image.save(
-        buffer,
-        format="PNG"
-    )
-
     st.download_button(
-        label="💾 Download Painting",
-        data=buffer.getvalue(),
-        file_name="smart_painting_result.png",
+        "⬇️ DOWNLOAD PAINTING",
+        data=image_to_bytes(
+            project["result"]
+        ),
+        file_name=(
+            project["name"]
+            .replace(" ", "_")
+            + ".png"
+        ),
         mime="image/png",
         use_container_width=True
     )
 
+    st.write("")
+
+    # --------------------------------------------------------
+    # Delete
+    # --------------------------------------------------------
+
+    if st.button(
+        "🗑️ DELETE THIS PROJECT",
+        use_container_width=True
+    ):
+
+        st.session_state.saved_projects.pop(
+            index
+        )
+
+        st.session_state.selected_project = None
+
+        go_saved_projects()
+
+        st.rerun()
+
 
 # ============================================================
-# CLEAR
+# PAGE ROUTER
 # ============================================================
 
-st.markdown("")
+if st.session_state.page == "home":
 
-if st.button(
-    "🧹 Clear Project",
-    use_container_width=True
-):
+    home_page()
 
-    st.session_state.reference_image = None
-    st.session_state.palette_image = None
-    st.session_state.result_image = None
-    st.session_state.available_palette = []
+elif st.session_state.page == "new":
 
-    st.rerun()
+    new_project_page()
 
+elif st.session_state.page == "saved":
 
-# ============================================================
-# FOOTER
-# ============================================================
+    saved_projects_page()
 
-st.markdown(
-    '<div class="status">Create • Experiment • Paint 🎨</div>',
-    unsafe_allow_html=True
-)
+elif st.session_state.page == "view_project":
+
+    view_project_page()
 
 
 
