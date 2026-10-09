@@ -404,6 +404,62 @@ def closest_paint(
     )
 
     return palette[index]
+    
+# ============================================================
+# SHADOW CORRECTION
+# ============================================================
+
+def correct_shadow_pixels(image):
+    """
+    Reduce false grey detections in dark shadow regions
+    when nearby pixels contain genuine paint colours.
+    """
+
+    hsv = cv2.cvtColor(
+        image,
+        cv2.COLOR_RGB2HSV
+    )
+
+    saturation = hsv[:, :, 1]
+    brightness = hsv[:, :, 2]
+
+    # Detect pixels that are both dark and nearly grey
+    shadow_candidates = (
+        (brightness < 115) &
+        (saturation < 65)
+    ).astype(np.uint8) * 255
+
+    # Find colourful pixels that can help identify
+    # the likely colour beneath a shadow
+    colourful_pixels = (
+        (saturation > 70) &
+        (brightness > 80)
+    ).astype(np.uint8) * 255
+
+    # Look for colourful pixels in the nearby region
+    kernel = np.ones((15, 15), np.uint8)
+
+    nearby_colour = cv2.dilate(
+        colourful_pixels,
+        kernel,
+        iterations=1
+    )
+
+    # Correct only dark, neutral pixels near colour
+    shadow_mask = cv2.bitwise_and(
+        shadow_candidates,
+        nearby_colour
+    )
+
+    # Fill shadow pixels using surrounding image colours
+    corrected = cv2.inpaint(
+        image,
+        shadow_mask,
+        5,
+        cv2.INPAINT_TELEA
+    )
+
+    return corrected
 
 
 # ============================================================
@@ -446,7 +502,14 @@ def create_result(
     else:
 
         working = original_array.copy()
+        
+    # --------------------------------------------------------
+    # Correct likely shadows before detecting colours
+    # --------------------------------------------------------
 
+    working = correct_shadow_pixels(working)
+
+   
     # --------------------------------------------------------
     # Reference color clusters
     # --------------------------------------------------------
