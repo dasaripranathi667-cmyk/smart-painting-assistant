@@ -380,31 +380,86 @@ def create_reference_clusters(
 # FIND CLOSEST PAINT COLOR
 # ============================================================
 
-def closest_paint(
-    reference_color,
-    palette
-):
+# ============================================================
+# FIND CLOSEST PAINT COLOR - COLOR FAMILY AWARE
+# ============================================================
+
+def closest_paint(reference_color, palette):
 
     if not palette:
         return reference_color
 
-    distances = []
+    reference = np.uint8(
+        [[reference_color]]
+    )
+
+    ref_hsv = cv2.cvtColor(
+        reference,
+        cv2.COLOR_RGB2HSV
+    )[0, 0].astype(float)
+
+    ref_hue, ref_sat, ref_val = ref_hsv
+
+    best_color = palette[0]
+    best_score = float("inf")
 
     for paint in palette:
 
-        distances.append(
-            color_distance_lab(
-                reference_color,
-                paint
-            )
+        paint_rgb = np.uint8(
+            [[paint]]
         )
 
-    index = int(
-        np.argmin(distances)
-    )
+        paint_hsv = cv2.cvtColor(
+            paint_rgb,
+            cv2.COLOR_RGB2HSV
+        )[0, 0].astype(float)
 
-    return palette[index]
-    
+        hue, sat, val = paint_hsv
+
+        # Normal LAB colour distance
+        lab_distance = color_distance_lab(
+            reference_color,
+            paint
+        )
+
+        # Penalize a neutral grey when the reference
+        # is clearly pink or another saturated colour.
+        grey_penalty = 0
+
+        if ref_sat > 45 and sat < 35:
+            grey_penalty = 35
+
+        # Hue distance, accounting for the circular
+        # nature of HSV hue values.
+        hue_difference = abs(ref_hue - hue)
+        hue_difference = min(
+            hue_difference,
+            180 - hue_difference
+        )
+
+        # Use hue similarity more strongly for colourful
+        # references, but less for nearly neutral colours.
+        hue_weight = 0.45 if ref_sat > 45 else 0.10
+
+        # Compare brightness while still allowing a
+        # darker version of the same colour.
+        brightness_penalty = (
+            abs(ref_val - val) * 0.10
+        )
+
+        score = (
+            lab_distance
+            + hue_difference * hue_weight
+            + brightness_penalty
+            + grey_penalty
+        )
+
+        if score < best_score:
+            best_score = score
+            best_color = paint
+
+    return best_color
+
 # ============================================================
 # SHADOW CORRECTION
 # ============================================================
