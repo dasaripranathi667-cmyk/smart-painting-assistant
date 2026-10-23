@@ -4,6 +4,9 @@ import cv2
 from PIL import Image
 from io import BytesIO
 from datetime import datetime
+import hashlib
+
+from streamlit_image_coordinates import streamlit_image_coordinates
 
 
 # ============================================================
@@ -92,6 +95,18 @@ if "result_image" not in st.session_state:
 if "detected_palette" not in st.session_state:
     st.session_state.detected_palette = []
 
+if "selected_palette" not in st.session_state:
+    st.session_state.selected_palette = []
+
+if "palette_upload_hash" not in st.session_state:
+    st.session_state.palette_upload_hash = None
+
+if "last_palette_click" not in st.session_state:
+    st.session_state.last_palette_click = None
+
+if "palette_picker_version" not in st.session_state:
+    st.session_state.palette_picker_version = 0
+
 if "saved_projects" not in st.session_state:
     st.session_state.saved_projects = []
 
@@ -121,6 +136,10 @@ def clear_current_project():
     st.session_state.palette_image = None
     st.session_state.result_image = None
     st.session_state.detected_palette = []
+    st.session_state.selected_palette = []
+    st.session_state.palette_upload_hash = None
+    st.session_state.last_palette_click = None
+    st.session_state.palette_picker_version = 0
 
 
 # ============================================================
@@ -161,6 +180,32 @@ def color_distance_lab(color1, color2):
     return np.linalg.norm(
         lab1 - lab2
     )
+
+
+# ============================================================
+# CLICK-TO-SELECT PAINT COLORS
+# ============================================================
+
+def sample_paint_color(image, x, y, radius=5):
+    """Sample the median RGB colour around a click to reduce noise."""
+    rgb = np.asarray(image.convert("RGB"))
+    height, width = rgb.shape[:2]
+    x = int(np.clip(x, 0, width - 1))
+    y = int(np.clip(y, 0, height - 1))
+    x0, x1 = max(0, x - radius), min(width, x + radius + 1)
+    y0, y1 = max(0, y - radius), min(height, y + radius + 1)
+    patch = rgb[y0:y1, x0:x1].reshape(-1, 3)
+    return np.median(patch, axis=0).astype(int).tolist()
+
+
+def add_selected_color(color):
+    """Add a sampled colour unless a visually similar colour is already selected."""
+    selected = st.session_state.selected_palette
+    if not selected or min(color_distance_lab(color, existing) for existing in selected) > 8:
+        selected.append(color)
+        st.session_state.selected_palette = selected
+        return True
+    return False
 
 
 # ============================================================
@@ -851,72 +896,101 @@ def new_project_page():
 
     palette_file = st.file_uploader(
         "Upload a photo of your paint palette",
-        type=[
-            "png",
-            "jpg",
-            "jpeg",
-            "webp"
-        ],
+        type=["png", "jpg", "jpeg", "webp"],
         key="palette_uploader"
     )
 
     if palette_file is not None:
+        palette_bytes = palette_file.getvalue()
+        upload_hash = hashlib.sha256(palette_bytes).hexdigest()
 
-        st.session_state.palette_image = (
-            Image.open(
-                palette_file
+        # Reset clicked colours only when the uploaded palette actually changes.
+        if upload_hash != st.session_state.palette_upload_hash:
+            st.session_state.palette_image = Image.open(
+                BytesIO(palette_bytes)
             ).convert("RGB")
-        )
-
-        # Detect colors immediately
-        st.session_state.detected_palette = (
-            extract_palette_colors(
-                st.session_state.palette_image,
-                max_colors=20
-            )
-        )
+            st.session_state.palette_upload_hash = upload_hash
+            st.session_state.selected_palette = []
+            st.session_state.last_palette_click = None
+            st.session_state.palette_picker_version += 1
+            st.session_state.result_image = None
+            st.session_state.detected_palette = []
 
     if st.session_state.palette_image:
+        st.info(
+            "Click directly on each paint blob in the image below to add that paint "
+            "to your usable palette. Click near the centre of the blob, away from "
+            "shadows, highlights, and the palette background."
+        )
 
-        st.image(
+        click = streamlit_image_coordinates(
             st.session_state.palette_image,
-            caption="Paint Palette",
-            use_container_width=True
+            key=f"palette_image_click_picker_{st.session_state.palette_picker_version}"
         )
+
+        if click is not None and "x" in click and "y" in click:
+            # The component may return displayed dimensions; scale the click back
+            # to the original uploaded image dimensions when those are available.
+            image_width, image_height = st.session_state.palette_image.size
+            displayed_width = click.get("width") or image_width
+            displayed_height = click.get("height") or image_height
+            sample_x = round(click["x"] * image_width / displayed_width)
+            sample_y = round(click["y"] * image_height / displayed_height)
+            click_signature = (round(sample_x), round(sample_y))
+
+            # Streamlit reruns after interaction. Do not add the same click again.
+            if click_signature != st.session_state.last_palette_click:
+                color = sample_paint_color(
+                    st.session_state.palette_image,
+                    sample_x,
+                    sample_y
+                )
+                added = add_selected_color(color)
+                st.session_state.last_palette_click = click_signature
+                st.session_state.result_image = None
+                if added:
+                    st.toast(
+                        f"Added paint RGB {color[0]}, {color[1]}, {color[2]}",
+                        icon="🎨"
+                    )
+                else:
+                    st.toast("A similar colour is already selected.", icon="ℹ️")
+                st.rerun()
 
     # ========================================================
-    # DETECTED COLORS
+    # CLICKED PALETTE COLORS
     # ========================================================
 
-    if st.session_state.detected_palette:
+    st.subheader("Selected Paint Colours")
 
-        st.subheader(
-            "Detected Paint Colors"
-        )
-
-        html = ""
-
-        for color in (
-            st.session_state.detected_palette
-        ):
-
-            r, g, b = color
-
-            html += (
-                f'<span class="palette-box" '
-                f'style="background:rgb({r},{g},{b})" '
-                f'title="RGB {r},{g},{b}"></span>'
-            )
-
-        st.markdown(
-            html,
-            unsafe_allow_html=True
-        )
-
-        st.caption(
-            f"{len(st.session_state.detected_palette)} "
-            "colors detected"
-        )
+    selected = st.session_state.selected_palette
+    if selected:
+        swatch_cols = st.columns(min(8, len(selected)))
+        for index, color in enumerate(selected):
+            with swatch_cols[index % len(swatch_cols)]:
+                r, g, b = color
+                st.markdown(
+                    f'<div style="height:48px;border-radius:10px;'
+                    f'background:rgb({r},{g},{b});border:2px solid white;'
+                    f'box-shadow:0 2px 7px rgba(0,0,0,.12)"></div>',
+                    unsafe_allow_html=True
+                )
+                st.caption(f"Paint {index + 1}\nRGB {r}, {g}, {b}")
+        if st.button("↩️ Undo Last Colour", use_container_width=True):
+            st.session_state.selected_palette.pop()
+            st.session_state.last_palette_click = None
+            st.session_state.palette_picker_version += 1
+            st.session_state.result_image = None
+            st.rerun()
+        if st.button("🧹 Clear Selected Colours", use_container_width=True):
+            st.session_state.selected_palette = []
+            st.session_state.last_palette_click = None
+            st.session_state.palette_picker_version += 1
+            st.session_state.result_image = None
+            st.rerun()
+        st.caption(f"{len(selected)} paint colour(s) selected. There is no fixed selection limit.")
+    else:
+        st.caption("No paints selected yet. Click on paint blobs in the photo above.")
 
     st.divider()
 
@@ -948,12 +1022,10 @@ def new_project_page():
                 "Please upload your paint palette."
             )
 
-        elif not (
-            st.session_state.detected_palette
-        ):
+        elif not st.session_state.selected_palette:
 
             st.warning(
-                "No paint colors were detected."
+                "Please click on at least one paint blob in your palette photo."
             )
 
         else:
@@ -965,7 +1037,7 @@ def new_project_page():
                 st.session_state.result_image = (
                     create_result(
                         st.session_state.reference_image,
-                        st.session_state.detected_palette
+                        st.session_state.selected_palette
                     )
                 )
 
@@ -1046,7 +1118,7 @@ def new_project_page():
 
                     "colors":
                         list(
-                            st.session_state.detected_palette
+                            st.session_state.selected_palette
                         ),
 
                     "date":
